@@ -1,0 +1,19 @@
+# VocaKey Backend Dependencies
+# Python 3.8+
+
+# Core Framework
+Flask==3.0.0
+flask-cors==4.0.0
+Werkzeug==3.0.1
+
+# Audio Processing & Pitch Detection
+librosa==0.10.1
+soundfile==0.12.1
+scipy==1.11.4
+numpy==1.26.2
+
+# Optional: Noise Reduction (uncomment jika diperlukan)
+# noisereduce==3.0.0
+
+# Audio File Support
+audioread==3.0.1
