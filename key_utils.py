@@ -13,20 +13,19 @@ MAJOR_KEYS = {
     'D': 2,
     'D#': 3,
     'E': 4,
-    'F': 5,    # Also E# enharmonic
+    'F': 5,  # Also E# enharmonic
     'F#': 6,
     'G': 7,
     'G#': 8,
     'A': 9,
     'A#': 10,
     'B': 11,
-    
     # Flat keys for input compatibility (convert to sharp)
-    'Db': 1,   # Convert to C#
-    'Eb': 3,   # Convert to D#
-    'Fb': 4,   # Convert to E
-    'Gb': 6,   # Convert to F#
-    'Ab': 8,   # Convert to G#
+    'Db': 1,  # Convert to C#
+    'Eb': 3,  # Convert to D#
+    'Fb': 4,  # Convert to E
+    'Gb': 6,  # Convert to F#
+    'Ab': 8,  # Convert to G#
     'Bb': 10,  # Convert to A#
     'Cb': 11,  # Convert to B
 }
@@ -46,6 +45,10 @@ SEMITONE_TO_KEY = {
     10: 'A#',
     11: 'B'
 }
+
+# Alias for backward compatibility
+KEY_SEMITONE_MAP = MAJOR_KEYS
+
 
 def normalize_key_name(key_input: str) -> str:
     """
@@ -85,6 +88,7 @@ def normalize_key_name(key_input: str) -> str:
     
     return key
 
+
 def get_key_semitone(key_str: str) -> int:
     """
     Get semitone value (0-11) for a key
@@ -101,6 +105,7 @@ def get_key_semitone(key_str: str) -> int:
         raise ValueError(f"Invalid key: {key_str} (normalized: {normalized})")
     
     return MAJOR_KEYS[normalized]
+
 
 def get_nearby_keys(detected_note: str, semitone_range: int = 1) -> List[str]:
     """
@@ -132,6 +137,7 @@ def get_nearby_keys(detected_note: str, semitone_range: int = 1) -> List[str]:
     
     return nearby_keys
 
+
 def calculate_semitone_distance(key1: str, key2: str) -> int:
     """
     Calculate shortest distance in semitones between two keys
@@ -161,10 +167,10 @@ def calculate_semitone_distance(key1: str, key2: str) -> int:
             distance = 12 - distance
         
         return distance
-    
     except ValueError as e:
         print(f"[key_utils ERROR] calculate_semitone_distance: {str(e)}")
         return 6  # Return max distance on error
+
 
 def semitone_to_mayor_note(semitone: int) -> str:
     """
@@ -178,6 +184,7 @@ def semitone_to_mayor_note(semitone: int) -> str:
     """
     return SEMITONE_TO_KEY.get(semitone % 12, 'C')
 
+
 def get_all_major_keys() -> List[str]:
     """
     Get all major keys in Mayor notation
@@ -186,3 +193,75 @@ def get_all_major_keys() -> List[str]:
         List of all 12 major keys
     """
     return [SEMITONE_TO_KEY[i] for i in range(12)]
+
+
+def transpose_key(original_key: str, semitone_shift: int) -> str:
+    """
+    Transpose a key by semitone shift
+    
+    Args:
+        original_key: Original key (e.g., 'C', 'F#', 'Bb')
+        semitone_shift: Number of semitones to shift (-12 to 12)
+    
+    Returns:
+        Transposed key in Mayor notation
+    
+    Example:
+        >>> transpose_key('C', 2)
+        'D'
+        >>> transpose_key('A', -3)
+        'F#'
+        >>> transpose_key('A#', 5)
+        'D#'
+    """
+    # Normalize input key
+    normalized_key = normalize_key_name(original_key)
+    
+    # Get semitone value of original key
+    original_semitone = get_key_semitone(normalized_key)
+    
+    # Calculate new semitone (with modulo 12 for wrapping)
+    new_semitone = (original_semitone + semitone_shift) % 12
+    
+    # Get new key name
+    new_key = SEMITONE_TO_KEY[new_semitone]
+    
+    return new_key
+
+
+def get_semitone_difference(key1: str, key2: str) -> int:
+    """
+    Calculate semitone difference between two keys (with direction)
+    
+    Args:
+        key1: First key (starting key)
+        key2: Second key (target key)
+    
+    Returns:
+        Semitone difference (-6 to +6)
+        Positive = transpose up
+        Negative = transpose down
+    
+    Example:
+        >>> get_semitone_difference('C', 'D')
+        2
+        >>> get_semitone_difference('D', 'C')
+        -2
+        >>> get_semitone_difference('A', 'F#')
+        -3
+    """
+    key1 = normalize_key_name(key1)
+    key2 = normalize_key_name(key2)
+    
+    semitone1 = get_key_semitone(key1)
+    semitone2 = get_key_semitone(key2)
+    
+    diff = semitone2 - semitone1
+    
+    # Normalize to -6 to +6 range (shortest distance with direction)
+    if diff > 6:
+        diff -= 12
+    elif diff < -6:
+        diff += 12
+    
+    return diff

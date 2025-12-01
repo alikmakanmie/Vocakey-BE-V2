@@ -3,14 +3,17 @@ VocaKey Backend - Pitch Detection & Vocal Analysis API
 Menggunakan algoritma konvensional (pYIN) untuk deteksi pitch dari humming
 """
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 import os
 from werkzeug.utils import secure_filename
 import traceback
+import sqlite3  # ✅ ADD THIS
+
 
 from pitch_detector import PitchDetector
 from vocal_analyzer import VocalAnalyzer
+from database_manager import DatabaseManager, db_manager  # ✅ Keep this
 from song_recommender_sqlite import SongRecommenderSQLite
 
 # ===== KONFIGURASI =====
@@ -398,8 +401,677 @@ def transpose_audio_endpoint():
             'error': f'Internal server error: {str(e)}'
         }), 500
 
+@app.route('/api/songs', methods=['POST'])
+def add_song():
+    """
+    Add song to database and auto-download from YouTube
+    Request (JSON):
+    {
+        "title": "Perfect",
+        "artist": "Ed Sheeran",
+        "key_note": "G",
+        "link_youtube": "https://youtube.com/...",
+        "genre": "Pop",
+        "tempo": 95,
+        "pitch_range_acc": "0.68",
+        "popularity_score": "0.98"
+    }
+    Response:
+    {
+        "success": true,
+        "message": "Song added and downloading",
+        "song": {...}
+    }
+    """
+    try:
+        import yt_dlp
+        from key_utils import normalize_key_name
+        
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({
+                'success': False,
+                'error': 'No JSON data provided'
+            }), 400
+        
+        # Validate required fields
+        required_fields = ['title', 'artist', 'key_note', 'link_youtube']
+        missing_fields = [field for field in required_fields if field not in data]
+        if missing_fields:
+            return jsonify({
+                'success': False,
+                'error': f'Missing required fields: {", ".join(missing_fields)}'
+            }), 400
+        
+        # Normalize key
+        normalized_key = normalize_key_name(data['key_note'])
+        
+        # Create folders
+        os.makedirs('songs/original', exist_ok=True)
+        os.makedirs('songs/transposed', exist_ok=True)
+        
+        # Generate safe filename
+        safe_title = ''.join(c for c in data['title'] if c.isalnum() or c in (' ', '_')).rstrip()
+        safe_artist = ''.join(c for c in data['artist'] if c.isalnum() or c in (' ', '_')).rstrip()
+        filename = f"{safe_title}_{safe_artist}".replace(' ', '_')
+        output_path = f"songs/original/{filename}.mp3"
+        
+        # ✅ Check if song already exists
+        existing = song_recommender.db_manager.get_song_by_title(data['title'])
+        
+        if existing and existing['artist'] == data['artist']:
+            return jsonify({
+                'success': False,
+                'error': f'Song "{data["title"]}" by {data["artist"]} already exists',
+                'existing_song': {
+                    'id': existing['id'],
+                    'title': existing['title'],
+                    'artist': existing['artist'],
+                    'key_note': existing['key_note'],
+                    'download_status': 'completed'
+                }
+            }), 409
+        
+        # ✅ Add to database
+        song_id = song_recommender.db_manager.add_song(
+            title=data['title'],
+            artist=data['artist'],
+            key_note=normalized_key,
+            audio_path=output_path,
+            genre=data.get('genre', 'Unknown')
+        )
+        
+        # Download from YouTube
+        print(f"\n{'='*60}")
+        print(f"[Download] Starting download: {data['title']} by {data['artist']}")
+        print(f"[Download] YouTube URL: {data['link_youtube']}")
+        print(f"[Download] Output: {output_path}")
+        print(f"{'='*60}\n")
+        
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'outtmpl': output_path.replace('.mp3', '.%(ext)s'),
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            }],
+            'quiet': False,
+            'no_warnings': False,
+        }
+        
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([data['link_youtube']])
+            
+            # Get file size
+            file_size_bytes = os.path.getsize(output_path)
+            file_size_mb = round(file_size_bytes / (1024 * 1024), 2)
+            
+            print(f"\n✅ Download completed!")
+            print(f"   File: {output_path}")
+            print(f"   Size: {file_size_mb} MB\n")
+            
+            # Get song data
+            song_data = song_recommender.db_manager.get_song_by_id(song_id)
+            song_data['file_size_mb'] = file_size_mb
+            song_data['download_status'] = 'completed'
+            
+            return jsonify({
+                'success': True,
+                'message': 'Song added and downloaded successfully',
+                'song': song_data
+            }), 201
+            
+        except Exception as download_error:
+            print(f"\n❌ Download failed: {str(download_error)}\n")
+            
+            return jsonify({
+                'success': False,
+                'error': f'Failed to download audio: {str(download_error)}',
+                'song_id': song_id
+            }), 500
+    
+    except Exception as e:
+        print(f"❌ Error adding song: {str(e)}")
+        print(traceback.format_exc())
+        
+        return jsonify({
+            'success': False,
+            'error': f'Failed to add song: {str(e)}'
+        }), 500
 
-# ===== RUN SERVER =====
+
+@app.route('/api/songs/<int:song_id>/transpose', methods=['POST'])
+def transpose_song_custom(song_id):
+    """
+    Transpose song with custom semitone shift
+    Request (JSON):
+    {
+        "semitone_shift": -2,  // Negative = down, Positive = up
+        "preserve_formant": true  // Optional, default = true
+    }
+    Response:
+    {
+        "success": true,
+        "transposed_url": "http://192.168.3.2:5000/songs/transposed/...",
+        "semitone_shift": -2,
+        "direction": "down",
+        "original_key": "G",
+        "new_key": "F"
+    }
+    """
+    try:
+        import librosa
+        import soundfile as sf
+        from key_utils import transpose_key
+        
+        # ✅ Get song from database
+        song = song_recommender.db_manager.get_song_by_id(song_id)
+        
+        if not song:
+            return jsonify({
+                'success': False,
+                'error': f'Song with ID {song_id} not found'
+            }), 404
+        
+        # Get request data
+        data = request.get_json()
+        if not data or 'semitone_shift' not in data:
+            return jsonify({
+                'success': False,
+                'error': 'semitone_shift is required'
+            }), 400
+        
+        semitone_shift = int(data['semitone_shift'])
+        preserve_formant = data.get('preserve_formant', True)
+        
+        # Validate range
+        if semitone_shift < -12 or semitone_shift > 12:
+            return jsonify({
+                'success': False,
+                'error': 'semitone_shift must be between -12 and 12'
+            }), 400
+        
+        if semitone_shift == 0:
+            return jsonify({
+                'success': False,
+                'error': 'semitone_shift cannot be 0 (no transposition needed)'
+            }), 400
+        
+        # Check if audio file exists
+        if not song.get('audio_path') or not os.path.exists(song['audio_path']):
+            return jsonify({
+                'success': False,
+                'error': f'Audio file not found for song "{song["title"]}". Download status: {song.get("download_status", "unknown")}'
+            }), 404
+        
+        # Generate output filename
+        direction = 'down' if semitone_shift < 0 else 'up'
+        transposed_filename = f"{os.path.splitext(os.path.basename(song['audio_path']))[0]}_transpose_{semitone_shift}.mp3"
+        transposed_path = os.path.join('songs/transposed', transposed_filename)
+        
+        # Check if already transposed (cache)
+        if os.path.exists(transposed_path):
+            print(f"✅ Transpose: Using cached version: {transposed_filename}")
+            
+            new_key = transpose_key(song['key_note'], semitone_shift)
+            
+            return jsonify({
+                'success': True,
+                'message': 'Transposed audio already exists (cached)',
+                'transposed_url': f"http://{request.host}/songs/transposed/{transposed_filename}",
+                'semitone_shift': semitone_shift,
+                'direction': direction,
+                'original_key': song['key_note'],
+                'new_key': new_key,
+                'song': {
+                    'id': song['id'],
+                    'title': song['title'],
+                    'artist': song['artist']
+                }
+            }), 200
+        
+        # Load and transpose audio
+        print(f"\n{'='*60}")
+        print(f"[Transpose] Loading: {song['audio_path']}")
+        y, sr = librosa.load(song['audio_path'], sr=16000, mono=True)
+        
+        print(f"[Transpose] Shifting by {semitone_shift} semitones ({direction})")
+        y_shifted = librosa.effects.pitch_shift(y, sr=sr, n_steps=semitone_shift)
+        
+        # Save transposed audio
+        sf.write(transposed_path, y_shifted, sr)
+        
+        file_size_bytes = os.path.getsize(transposed_path)
+        file_size_mb = round(file_size_bytes / (1024 * 1024), 2)
+        
+        print(f"✅ Transpose: Done! Size: {file_size_mb} MB")
+        print(f"{'='*60}\n")
+        
+        new_key = transpose_key(song['key_note'], semitone_shift)
+        
+        return jsonify({
+            'success': True,
+            'message': 'Song transposed successfully',
+            'transposed_url': f"http://{request.host}/songs/transposed/{transposed_filename}",
+            'semitone_shift': semitone_shift,
+            'direction': direction,
+            'original_key': song['key_note'],
+            'new_key': new_key,
+            'file_size_mb': file_size_mb,
+            'song': {
+                'id': song['id'],
+                'title': song['title'],
+                'artist': song['artist']
+            }
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Error transposing song: {str(e)}")
+        print(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': f'Failed to transpose song: {str(e)}'
+        }), 500
+
+
+from flask import send_file
+import os
+
+# ✅ IMPROVED ENDPOINT
+@app.route('/api/songs/<int:song_id>/audio', methods=['GET'])
+def get_song_audio(song_id):
+    """
+    Serve audio file untuk lagu tertentu
+    Contoh: /api/songs/1/audio
+    """
+    try:
+        song = song_recommender.db_manager.get_song_by_id(song_id)
+        
+        if not song:
+            print(f"❌ Song ID {song_id} not found in database")
+            return jsonify({
+                "success": False,
+                "error": f"Song with ID {song_id} not found"
+            }), 404
+        
+        print(f"✅ Found song: {song.get('title')}")
+        
+        audio_path = song.get('audio_path')
+        
+        if not audio_path:
+            audio_path = os.path.join('songs', f"{song['title']}.mp3")
+        
+        # ✅ FOR TESTING: If file not exists, redirect to demo
+        if not os.path.exists(audio_path):
+            print(f"⚠️  Audio file not found: {audio_path}")
+            print(f"✅ Using demo audio instead")
+            
+            # Return demo audio URL as redirect or JSON
+            demo_url = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3"
+            
+            return jsonify({
+                "success": True,
+                "audio_url": demo_url,
+                "message": "Using demo audio (real file not found)",
+                "song": {
+                    "id": song['id'],
+                    "title": song['title'],
+                    "artist": song['artist']
+                }
+            }), 200
+        
+        # If file exists, serve it
+        file_ext = os.path.splitext(audio_path)[1].lower()
+        mimetype_map = {
+            '.mp3': 'audio/mpeg',
+            '.wav': 'audio/wav',
+            '.m4a': 'audio/mp4',
+            '.ogg': 'audio/ogg',
+            '.flac': 'audio/flac',
+        }
+        mimetype = mimetype_map.get(file_ext, 'audio/mpeg')
+        
+        print(f"✅ Serving audio: {audio_path} ({mimetype})")
+        return send_file(audio_path, mimetype=mimetype)
+        
+    except Exception as e:
+        print(f"❌ Error serving audio: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
+
+# ✅ ENDPOINT: Get song by title
+@app.route('/api/songs/by-title/<string:title>/audio', methods=['GET'])
+def get_song_audio_by_title(title):
+    """
+    Serve audio file berdasarkan judul
+    Contoh: /api/songs/by-title/Thinking Out Loud/audio
+    """
+    try:
+        song = song_recommender.db_manager.get_song_by_title(title)
+        
+        if not song:
+            return jsonify({
+                "success": False,
+                "error": f"Song '{title}' not found"
+            }), 404
+        
+        # Redirect to ID-based endpoint
+        return get_song_audio(song['id'])
+        
+    except Exception as e:
+        print(f"❌ Error: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
+# ✅ ENDPOINT: Demo audio (fallback untuk testing)
+@app.route('/api/songs/demo/audio', methods=['GET'])
+def get_demo_audio():
+    """
+    Return demo audio URL untuk testing
+    """
+    return jsonify({
+        "success": True,
+        "audio_url": "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
+        "message": "This is a demo audio file"
+    }), 200
+
+
+# ✅ ENDPOINT: List all songs
+@app.route('/api/songs', methods=['GET'])
+def list_songs():
+    """
+    List semua lagu di database
+    """
+    try:
+        conn = sqlite3.connect(song_recommender.db_manager.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT id, title, artist, key_note, audio_path FROM songs")
+        rows = cursor.fetchall()
+        conn.close()
+        
+        songs = [dict(row) for row in rows]
+        
+        return jsonify({
+            "success": True,
+            "count": len(songs),
+            "songs": songs
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+@app.route('/songs/<path:subpath>/<filename>')
+def serve_audio(subpath, filename):
+    """
+    Serve audio files from songs folder
+    Example: /songs/transposed/perfect_transpose_2.mp3
+    """
+    try:
+        directory = os.path.join('songs', subpath)
+        return send_from_directory(directory, filename)
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'File not found: {str(e)}'
+        }), 404
+
+@app.route('/songs/file/<string:title>', methods=['GET'])
+def get_song_file_by_title(title):
+    """
+    Serve audio file by matching title only
+    
+    Example:
+        GET /songs/file/Shallow
+        -> Returns songs/original/Shallow_Lady_Gaga__Bradley_Cooper.mp3
+    """
+    try:
+        print(f"\n🔍 Looking for audio file matching title: {title}")
+        
+        songs_folder = 'songs/original'
+        
+        if not os.path.exists(songs_folder):
+            return jsonify({
+                'success': False,
+                'error': 'Songs folder not found'
+            }), 404
+        
+        # Get all MP3 files
+        mp3_files = [f for f in os.listdir(songs_folder) if f.endswith('.mp3')]
+        
+        # Normalize title for matching
+        normalized_title = title.lower().replace('_', '').replace(' ', '')
+        
+        # Find matching file
+        for filename in mp3_files:
+            # Extract title part from filename (before first underscore or artist name)
+            file_title_part = filename.split('_')[0].lower()
+            
+            # Also try matching the whole filename start
+            filename_normalized = filename.lower().replace('_', '').replace(' ', '')
+            
+            if (file_title_part == title.lower() or 
+                filename_normalized.startswith(normalized_title)):
+                
+                print(f"✅ Found matching file: {filename}")
+                
+                # Serve the file
+                return send_from_directory(songs_folder, filename)
+        
+        # If no match found
+        print(f"❌ No file found matching: {title}")
+        print(f"   Available files: {mp3_files}")
+        
+        return jsonify({
+            'success': False,
+            'error': f'No audio file found for "{title}"'
+        }), 404
+        
+    except Exception as e:
+        print(f"❌ Error: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/api/songs/search/<string:title>', methods=['GET'])
+def search_song_by_title(title):
+    """
+    Get song details and audio URL by title
+    
+    Returns song metadata + actual audio file path
+    """
+    try:
+        print(f"\n🔍 Searching for song: {title}")
+        
+        # Search in database
+        song = song_recommender.db_manager.get_song_by_title(title)
+        
+        if not song:
+            # Try fuzzy search
+            all_songs = song_recommender.db_manager.get_all_songs()
+            title_lower = title.lower()
+            
+            for s in all_songs:
+                if title_lower in s['title'].lower():
+                    song = s
+                    break
+        
+        if not song:
+            return jsonify({
+                'success': False,
+                'error': f'Song "{title}" not found'
+            }), 404
+        
+        # Find actual audio file
+        audio_url = None
+        songs_folder = 'songs/original'
+        
+        if os.path.exists(songs_folder):
+            mp3_files = [f for f in os.listdir(songs_folder) if f.endswith('.mp3')]
+            
+            # Match by title
+            title_normalized = song['title'].lower().replace(' ', '')
+            
+            for filename in mp3_files:
+                filename_normalized = filename.lower().replace('_', '').replace(' ', '')
+                
+                if filename_normalized.startswith(title_normalized):
+                    audio_url = f"/songs/original/{filename}"
+                    break
+        
+        # Use database path as fallback
+        if not audio_url:
+            audio_url = song.get('audio_file_path') or song.get('audio_path')
+        
+        print(f"✅ Found: {song['title']} -> {audio_url}")
+        
+        return jsonify({
+            'success': True,
+            'song': {
+                **song,
+                'audio_url': audio_url
+            }
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Error: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/api/songs/search/<string:title>/transpose', methods=['POST'])
+def transpose_song_by_title(title):
+    """Transpose song audio by title"""
+    try:
+        import librosa
+        import soundfile as sf
+        from key_utils import transpose_key
+        
+        data = request.get_json()
+        semitone_shift = data.get('semitone_shift', 0)
+        preserve_formant = data.get('preserve_formant', True)
+        
+        print(f"\n🎵 Transpose Request:")
+        print(f"   Title: {title}")
+        print(f"   Shift: {semitone_shift} semitones")
+        
+        if semitone_shift == 0:
+            return jsonify({'success': False, 'error': 'No transpose needed'}), 400
+        
+        # Find song
+        song = song_recommender.db_manager.get_song_by_title(title)
+        
+        if not song:
+            all_songs = song_recommender.db_manager.get_all_songs()
+            title_lower = title.lower()
+            for s in all_songs:
+                if title_lower in s['title'].lower():
+                    song = s
+                    break
+        
+        if not song:
+            return jsonify({'success': False, 'error': f'Song "{title}" not found'}), 404
+        
+        # Find audio file
+        original_audio_path = None
+        songs_folder = 'songs/original'
+        
+        if os.path.exists(songs_folder):
+            mp3_files = [f for f in os.listdir(songs_folder) if f.endswith('.mp3')]
+            title_normalized = song['title'].lower().replace(' ', '')
+            
+            for filename in mp3_files:
+                filename_normalized = filename.lower().replace('_', '').replace(' ', '')
+                if filename_normalized.startswith(title_normalized):
+                    original_audio_path = os.path.join(songs_folder, filename)
+                    break
+        
+        if not original_audio_path:
+            original_audio_path = song.get('audio_file_path') or song.get('audio_path')
+        
+        if not original_audio_path or not os.path.exists(original_audio_path):
+            return jsonify({'success': False, 'error': 'Audio file not found'}), 404
+        
+        print(f"✅ Found: {original_audio_path}")
+        
+        # Generate output path
+        transposed_folder = 'songs/transposed'
+        os.makedirs(transposed_folder, exist_ok=True)
+        
+        base_filename = os.path.splitext(os.path.basename(original_audio_path))[0]
+        shift_str = f"+{semitone_shift}" if semitone_shift > 0 else str(semitone_shift)
+        transposed_filename = f"{base_filename}_transpose_{shift_str}.wav"
+        transposed_path = os.path.join(transposed_folder, transposed_filename)
+        
+        # Check cache
+        if os.path.exists(transposed_path):
+            print(f"✅ Using cached: {transposed_path}")
+        else:
+            print(f"🎵 Transposing...")
+            
+            # Load and transpose
+            y, sr = librosa.load(original_audio_path, sr=None)
+            y_shifted = librosa.effects.pitch_shift(y, sr=sr, n_steps=semitone_shift)
+            sf.write(transposed_path, y_shifted, sr)
+            
+            print(f"✅ Saved: {transposed_path}")
+        
+        # Calculate new key
+        original_key = song.get('key_note', 'C') + ' major'
+        new_key = transpose_key(original_key, semitone_shift)
+        
+        # Response
+        transposed_url = f"http://192.168.3.2:5000/songs/transposed/{transposed_filename}"
+        
+        return jsonify({
+            'success': True,
+            'transposed_url': transposed_url,
+            'original_key': original_key,
+            'new_key': new_key,
+            'semitone_shift': semitone_shift
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Error: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/songs/transposed/<filename>')
+def serve_transposed_file(filename):
+    """Serve transposed audio files"""
+    try:
+        transposed_folder = 'songs/transposed'
+        
+        if not os.path.exists(os.path.join(transposed_folder, filename)):
+            return jsonify({'success': False, 'error': 'File not found'}), 404
+        
+        return send_from_directory(transposed_folder, filename)
+        
+    except Exception as e:
+        print(f"❌ Error: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 
 if __name__ == '__main__':
     print("\n" + "=" * 60)

@@ -1,124 +1,162 @@
-"""
-Song Recommender using SQLite Database
-"""
-
-from typing import List, Dict
-from database_manager import db_manager
-from database_models import Song
-from sqlalchemy import and_, or_
-from key_utils import get_nearby_keys, calculate_semitone_distance
+import numpy as np
+from typing import List, Dict, Optional
+from database_manager import DatabaseManager
 
 class SongRecommenderSQLite:
-    def __init__(self):
-        self.db_manager = db_manager
+    """
+    Song recommender using SQLite database
+    (No SQLAlchemy, pure SQLite)
+    """
+    
+    def __init__(self, db_path: str = "songs.db"):
+        self.db_manager = DatabaseManager(db_path)
         print("✅ SongRecommenderSQLite initialized (SQLite)")
     
-    def recommend(self, vocal_analysis: dict, max_results: int = 10) -> List[Dict]:
+    def recommend(
+        self,
+        vocal_analysis: Dict,
+        max_results: int = 10
+    ) -> List[Dict]:
         """
         Recommend songs based on vocal analysis
         
         Args:
-            vocal_analysis: Dict from VocalAnalyzer
+            vocal_analysis: Dict containing key, pitch_range, etc.
             max_results: Maximum number of recommendations
         
         Returns:
             List of recommended songs with compatibility scores
         """
-        session = self.db_manager.get_session()
-        
         try:
-            # Extract detected key & confidence
+            # Extract key info
             key_info = vocal_analysis.get('key', {})
-            detected_key = key_info.get('key', 'C') if isinstance(key_info, dict) else 'C'
-            confidence = key_info.get('confidence', 0.5) if isinstance(key_info, dict) else 0.5
+            
+            if isinstance(key_info, dict):
+                detected_key = key_info.get('key', 'C')
+                confidence = key_info.get('confidence', 0.0)
+            else:
+                detected_key = 'C'
+                confidence = 0.0
             
             print(f"[Recommender] Detected key: {detected_key}, Confidence: {confidence}")
             
-            # Get nearby keys (±1 semitone)
-            try:
-                matched_keys = get_nearby_keys(detected_key, semitone_range=1)
-                print(f"[Recommender] Matched keys: {matched_keys}")
-            except Exception as e:
-                print(f"[Recommender ERROR] get_nearby_keys failed: {str(e)}")
-                matched_keys = [detected_key]
+            # Find compatible keys (same key + neighbors)
+            matched_keys = self._get_compatible_keys(detected_key)
+            print(f"[Recommender] Matched keys: {matched_keys}")
             
-            # Query database - FIXED: Remove confidence filter for debugging
+            # Query database
             print(f"[Recommender] Querying database...")
+            songs = self.db_manager.get_songs_by_keys(matched_keys)
+            
             print(f"[Recommender] SQL Filter: key_note IN {matched_keys}")
+            print(f"[Recommender] Found {len(songs)} matches before sorting")
             
-            # Simple query without confidence filter first
-            results = session.query(Song).filter(
-                Song.key_note.in_(matched_keys)
-            ).all()
+            if not songs:
+                print("[Recommender] No songs found in database")
+                return []
             
-            print(f"[Recommender] Found {len(results)} matches before sorting")
+            # Calculate compatibility scores
+            scored_songs = []
+            for song in songs:
+                score = self._calculate_compatibility(song, vocal_analysis)
+                song['compatibility_score'] = score
+                scored_songs.append(song)
             
-            if len(results) == 0:
-                # Debug: Check what keys exist in database
-                all_songs = session.query(Song).all()
-                unique_keys = set([song.key_note for song in all_songs])
-                print(f"[Recommender DEBUG] Available keys in database: {unique_keys}")
-                print(f"[Recommender DEBUG] Looking for keys: {matched_keys}")
-                print(f"[Recommender DEBUG] Total songs in DB: {len(all_songs)}")
-                
-                # Check if any key matches
-                for key in matched_keys:
-                    count = session.query(Song).filter(Song.key_note == key).count()
-                    print(f"[Recommender DEBUG] Songs with key '{key}': {count}")
+            # Sort by total score
+            scored_songs.sort(
+                key=lambda x: x['compatibility_score'].get('total', 0),
+                reverse=True
+            )
             
-            # Calculate match scores
-            recommendations = []
-            for song in results:
-                # Calculate semitone distance
-                distance = calculate_semitone_distance(detected_key, song.key_note)
-                
-                # Calculate match score
-                # - Perfect match (0 semitones): 100 points
-                # - 1 semitone off: 80 points
-                # - 2+ semitones: 50 points
-                if distance == 0:
-                    key_match_score = 1.0
-                elif distance == 1:
-                    key_match_score = 0.8
-                else:
-                    key_match_score = 0.5
-                
-                # Combine with confidence and popularity
-                total_score = (
-                    key_match_score * 0.6 +
-                    confidence * 0.2 +
-                    song.popularity_score * 0.2
-                )
-                
-                recommendations.append({
-                    'id': song.id,
-                    'title': song.title,
-                    'artist': song.artist,
-                    'key_note': song.key_note,
-                    'pitch_range_acc': song.pitch_range_acc,
-                    'link_youtube': song.link_youtube,
-                    'genre': song.genre,
-                    'tempo': song.tempo,
-                    'popularity_score': song.popularity_score,
-                    'match_score': total_score,
-                    'semitone_distance': distance
-                })
+            # Return top results
+            results = scored_songs[:max_results]
+            print(f"[Recommender] Returning {len(results)} recommendations")
             
-            # Sort by match score (highest first)
-            recommendations.sort(key=lambda x: x['match_score'], reverse=True)
+            return results
             
-            # Limit results
-            recommendations = recommendations[:max_results]
-            
-            print(f"[Recommender] Returning {len(recommendations)} recommendations")
-            
-            return recommendations
-        
         except Exception as e:
-            print(f"[Recommender ERROR] {str(e)}")
+            print(f"[Recommender] Error: {str(e)}")
             import traceback
             print(traceback.format_exc())
             return []
+    
+    def _get_compatible_keys(self, key: str) -> List[str]:
+        """Get compatible keys including neighbors"""
+        key_circle = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
         
-        finally:
-            session.close()
+        try:
+            idx = key_circle.index(key)
+            # Return same key + neighbors (±1 semitone)
+            compatible = [
+                key_circle[(idx - 1) % 12],
+                key_circle[idx],
+                key_circle[(idx + 1) % 12]
+            ]
+            return compatible
+        except ValueError:
+            # If key not found, return just the key itself
+            return [key]
+    
+    def _calculate_compatibility(
+        self,
+        song: Dict,
+        vocal_analysis: Dict
+    ) -> Dict:
+        """
+        Calculate compatibility score between song and user's voice
+        
+        Returns:
+            Dict with breakdown: {
+                'key_match': 0.0-1.0,
+                'range_match': 0.0-1.0,
+                'total': 0.0-1.0
+            }
+        """
+        scores = {
+            'key_match': 0.0,
+            'range_match': 0.0,
+            'total': 0.0
+        }
+        
+        # 1. Key matching (50% weight)
+        key_info = vocal_analysis.get('key', {})
+        if isinstance(key_info, dict):
+            user_key = key_info.get('key', 'C')
+        else:
+            user_key = 'C'
+        
+        song_key = song.get('key_note', 'C')
+        
+        if user_key == song_key:
+            scores['key_match'] = 1.0
+        elif self._are_keys_close(user_key, song_key):
+            scores['key_match'] = 0.7
+        else:
+            scores['key_match'] = 0.3
+        
+        # 2. Range matching (50% weight)
+        # Simple heuristic - can be improved
+        scores['range_match'] = 0.8
+        
+        # Calculate total
+        scores['total'] = (scores['key_match'] * 0.5 + scores['range_match'] * 0.5)
+        
+        return scores
+    
+    def _are_keys_close(self, key1: str, key2: str) -> bool:
+        """Check if two keys are within 2 semitones"""
+        key_circle = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+        
+        try:
+            idx1 = key_circle.index(key1)
+            idx2 = key_circle.index(key2)
+            
+            # Calculate distance (considering circle)
+            distance = min(
+                abs(idx1 - idx2),
+                12 - abs(idx1 - idx2)
+            )
+            
+            return distance <= 2
+        except ValueError:
+            return False

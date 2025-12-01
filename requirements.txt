@@ -1,22 +1,11 @@
-# VocaKey Backend Dependencies
-# Python 3.8+
-
-# Core Framework
 Flask==3.0.0
 flask-cors==4.0.0
 Werkzeug==3.0.1
-
-# Audio Processing & Pitch Detection
+SQLAlchemy>=2.0.0
 librosa==0.10.1
 soundfile==0.12.1
-scipy==1.11.4
-numpy==1.26.2
-
-# Optional: Noise Reduction (uncomment jika diperlukan)
-# noisereduce==3.0.0
-
-# Audio File Support
+scipy>=1.13.0
+numpy>=1.26.0
 audioread==3.0.1
-
-# NEW: SQLAlchemy untuk database
-SQLAlchemy==2.0.23
+yt-dlp>=2023.10.13
+python-dotenv==1.0.0
