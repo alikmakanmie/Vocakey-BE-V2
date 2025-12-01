@@ -1,0 +1,122 @@
+[
+  {
+    "id": "1",
+    "title": "Perfect",
+    "artist": "Ed Sheeran",
+    "key": "G",
+    "scale": "major",
+    "tempo": 95,
+    "vocal_range_midi": {
+      "min": 57,
+      "max": 76
+    },
+    "genre": "Pop",
+    "difficulty": "Medium",
+    "year": 2017
+  },
+  {
+    "id": "2",
+    "title": "Someone Like You",
+    "artist": "Adele",
+    "key": "A",
+    "scale": "major",
+    "tempo": 67,
+    "vocal_range_midi": {
+      "min": 57,
+      "max": 77
+    },
+    "genre": "Pop Ballad",
+    "difficulty": "Medium",
+    "year": 2011
+  },
+  {
+    "id": "3",
+    "title": "Shape of You",
+    "artist": "Ed Sheeran",
+    "key": "C#",
+    "scale": "minor",
+    "tempo": 96,
+    "vocal_range_midi": {
+      "min": 52,
+      "max": 69
+    },
+    "genre": "Pop",
+    "difficulty": "Easy",
+    "year": 2017
+  },
+  {
+    "id": "4",
+    "title": "All of Me",
+    "artist": "John Legend",
+    "key": "Ab",
+    "scale": "major",
+    "tempo": 120,
+    "vocal_range_midi": {
+      "min": 53,
+      "max": 72
+    },
+    "genre": "R&B/Soul",
+    "difficulty": "Medium",
+    "year": 2013
+  },
+  {
+    "id": "5",
+    "title": "Thinking Out Loud",
+    "artist": "Ed Sheeran",
+    "key": "D",
+    "scale": "major",
+    "tempo": 79,
+    "vocal_range_midi": {
+      "min": 55,
+      "max": 74
+    },
+    "genre": "Pop/Soul",
+    "difficulty": "Medium",
+    "year": 2014
+  },
+  {
+    "id": "6",
+    "title": "Let It Be",
+    "artist": "The Beatles",
+    "key": "C",
+    "scale": "major",
+    "tempo": 72,
+    "vocal_range_midi": {
+      "min": 60,
+      "max": 76
+    },
+    "genre": "Rock/Pop",
+    "difficulty": "Easy",
+    "year": 1970
+  },
+  {
+    "id": "7",
+    "title": "Hallelujah",
+    "artist": "Leonard Cohen",
+    "key": "C",
+    "scale": "major",
+    "tempo": 60,
+    "vocal_range_midi": {
+      "min": 48,
+      "max": 72
+    },
+    "genre": "Folk/Pop",
+    "difficulty": "Medium",
+    "year": 1984
+  },
+  {
+    "id": "8",
+    "title": "Shallow",
+    "artist": "Lady Gaga & Bradley Cooper",
+    "key": "G",
+    "scale": "minor",
+    "tempo": 96,
+    "vocal_range_midi": {
+      "min": 55,
+      "max": 79
+    },
+    "genre": "Pop/Rock",
+    "difficulty": "Hard",
+    "year": 2018
+  }
+]
