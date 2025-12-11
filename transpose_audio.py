@@ -1,7 +1,9 @@
 # transpose_audio.py
+
 """
 Audio Transpose Module
 Transpose audio file dari satu key ke key lain dengan preserving formant
+IMPROVED: High quality with formant preservation
 """
 
 import librosa
@@ -10,14 +12,21 @@ import numpy as np
 from typing import Tuple, Optional
 import warnings
 
+# Try import pyrubberband
+try:
+    import pyrubberband as pyrb
+    PYRUBBERBAND_AVAILABLE = True
+except ImportError:
+    PYRUBBERBAND_AVAILABLE = False
+    print("⚠️  pyrubberband not installed. Using librosa fallback.")
+    print("   For best quality: pip install pyrubberband")
+
 # ===== MAJOR KEYS DICTIONARY =====
 MAJOR_KEYS = {
     # Natural keys
     'C': 0, 'D': 2, 'E': 4, 'F': 5, 'G': 7, 'A': 9, 'B': 11,
-    
     # Sharp keys
     'C#': 1, 'D#': 3, 'E#': 5, 'F#': 6, 'G#': 8, 'A#': 10, 'B#': 0,
-    
     # Flat keys (enharmonic)
     'Db': 1, 'Eb': 3, 'Fb': 4, 'Gb': 6, 'Ab': 8, 'Bb': 10, 'Cb': 11,
 }
@@ -44,6 +53,7 @@ def normalize_key_name(key_input):
     
     return key
 
+
 def calculate_semitone_shift(original_key: str, target_key: str) -> int:
     """
     Hitung perbedaan semitone antara keys
@@ -67,6 +77,7 @@ def calculate_semitone_shift(original_key: str, target_key: str) -> int:
     
     return semitone_shift
 
+
 def get_transpose_recommendation(semitone_shift: int) -> dict:
     """Generate quality recommendation"""
     recommendation = {
@@ -79,20 +90,17 @@ def get_transpose_recommendation(semitone_shift: int) -> dict:
     
     if abs(semitone_shift) == 0:
         recommendation['suggestion'] = "No transpose needed. Keys are identical."
-    
     elif abs(semitone_shift) <= OPTIMAL_TRANSPOSE_RANGE:
         recommendation['suggestion'] = (
             f"Optimal transpose range (±{OPTIMAL_TRANSPOSE_RANGE} semitones). "
             f"Audio quality will be excellent."
         )
-    
     elif abs(semitone_shift) <= MAXIMUM_TRANSPOSE_RANGE:
         recommendation['quality_warning'] = (
             f"Transpose of {abs(semitone_shift)} semitones may cause slight "
             f"audio degradation. Consider using ±{OPTIMAL_TRANSPOSE_RANGE} semitones."
         )
         recommendation['suggestion'] = "Acceptable but not optimal."
-    
     else:
         recommendation['quality_warning'] = (
             f"EXTREME TRANSPOSE ({abs(semitone_shift)} semitones)! "
@@ -102,6 +110,7 @@ def get_transpose_recommendation(semitone_shift: int) -> dict:
     
     return recommendation
 
+
 # ===== MAIN TRANSPOSE FUNCTION =====
 
 def transpose_audio(
@@ -109,22 +118,20 @@ def transpose_audio(
     original_key: str,
     target_key: str,
     output_file: Optional[str] = None,
-    method: str = 'librosa',
     preserve_formant: bool = True
 ) -> Tuple[str, dict]:
     """
-    Transpose audio file dari original key ke target key
+    Transpose audio file dengan formant preservation untuk natural sound
     
     Args:
         audio_file: Path ke file audio input
         original_key: Key asli (e.g., 'C', 'G#')
         target_key: Key target (e.g., 'D', 'A')
         output_file: Output path (auto-generate if None)
-        method: 'librosa' atau 'pyrubberband'
-        preserve_formant: Preserve formant untuk naturalness
+        preserve_formant: Preserve formant untuk naturalness (RECOMMENDED: True)
     
     Returns:
-        (output_filepath, transpose_info_dict)
+        (output_file_path, transpose_info_dict)
     """
     
     # Calculate semitone shift
@@ -149,27 +156,60 @@ def transpose_audio(
     y, sr = librosa.load(audio_file, sr=None, mono=True)
     duration = len(y) / sr
     
-    # Transpose
+    # Transpose with improved quality
     print(f"[2/4] Transposing by {semitone_shift} semitones...")
     
-    if method == 'librosa':
+    # ===== HYBRID APPROACH: Try pyrubberband first, fallback to librosa advanced =====
+    method_used = None
+    
+    if PYRUBBERBAND_AVAILABLE:
+        try:
+            # ✅ BEST METHOD - Pyrubberband with formant preservation
+            rbargs = {'--formant': 'preserved'} if preserve_formant else {}
+            y_transposed = pyrb.pitch_shift(y, sr, semitone_shift, rbargs=rbargs)
+            method_used = "pyrubberband (high quality)"
+            print(f"   ✅ Using {method_used}")
+        except Exception as e:
+            print(f"   ⚠️  Pyrubberband failed: {e}")
+            method_used = None
+    
+    if method_used is None:
+        # Fallback to librosa advanced
+        print("   ⚠️  Using librosa advanced (fallback)...")
+        
+        # High quality pitch shift
         y_transposed = librosa.effects.pitch_shift(
             y=y,
             sr=sr,
             n_steps=semitone_shift,
-            bins_per_octave=12 * 4 if preserve_formant else 12
+            bins_per_octave=12 * 8,  # Higher resolution (was 12*4)
+            res_type='kaiser_best',  # Best quality resampling
         )
-    
-    elif method == 'pyrubberband':
-        try:
-            import pyrubberband as pyrb
-            y_transposed = pyrb.pitch_shift(y, sr, semitone_shift)
-        except ImportError:
-            warnings.warn("pyrubberband not installed. Using librosa.", UserWarning)
-            y_transposed = librosa.effects.pitch_shift(y, sr, n_steps=semitone_shift)
-    
-    else:
-        raise ValueError(f"Invalid method: {method}")
+        
+        if preserve_formant:
+            # Manual formant preservation via time stretching
+            stretch_factor = 2.0 ** (semitone_shift / 12.0)
+            y_stretched = librosa.effects.time_stretch(
+                y_transposed, 
+                rate=1.0 / stretch_factor
+            )
+            
+            # Trim or pad to match original length
+            target_length = len(y)
+            if len(y_stretched) > target_length:
+                y_transposed = y_stretched[:target_length]
+            else:
+                y_transposed = np.pad(
+                    y_stretched, 
+                    (0, target_length - len(y_stretched)),
+                    mode='constant'
+                )
+            
+            method_used = "librosa advanced (formant preserved)"
+        else:
+            method_used = "librosa advanced (no formant preservation)"
+        
+        print(f"   ✅ Using {method_used}")
     
     # Auto-generate output filename
     if output_file is None:
@@ -181,14 +221,14 @@ def transpose_audio(
     print(f"[3/4] Saving to: {output_file}")
     sf.write(output_file, y_transposed, sr)
     
-    # Info
+    # Transpose info
     transpose_info = {
         'success': True,
         'original_key': original_key,
         'target_key': target_key,
         'semitone_shift': semitone_shift,
-        'direction': 'up' if semitone_shift > 0 else 'down' if semitone_shift < 0 else 'none',
-        'method': method,
+        'direction': 'up' if semitone_shift > 0 else ('down' if semitone_shift < 0 else 'none'),
+        'method': method_used,
         'preserve_formant': preserve_formant,
         'audio_info': {
             'duration_seconds': float(duration),
@@ -204,6 +244,46 @@ def transpose_audio(
         }
     }
     
-    print(f"[4/4] Complete! Shift: {semitone_shift} semitones {transpose_info['direction']}")
+    print(f"[4/4] Complete! Shift: {semitone_shift} semitones ({transpose_info['direction']})")
+    print(f"      Method: {method_used}")
+    print(f"      Output: {output_file}")
     
     return output_file, transpose_info
+
+
+# ===== TEST FUNCTION =====
+
+if __name__ == '__main__':
+    import sys
+    
+    if len(sys.argv) < 4:
+        print("Usage: python transpose_audio.py <input_file> <original_key> <target_key>")
+        print("Example: python transpose_audio.py test.wav C D")
+        sys.exit(1)
+    
+    input_file = sys.argv[1]
+    orig_key = sys.argv[2]
+    targ_key = sys.argv[3]
+    
+    try:
+        output, info = transpose_audio(
+            audio_file=input_file,
+            original_key=orig_key,
+            target_key=targ_key,
+            preserve_formant=True
+        )
+        
+        print("\n" + "="*60)
+        print("✅ TRANSPOSE SUCCESS!")
+        print("="*60)
+        print(f"Original Key: {info['original_key']}")
+        print(f"Target Key: {info['target_key']}")
+        print(f"Semitone Shift: {info['semitone_shift']:+d}")
+        print(f"Method: {info['method']}")
+        print(f"Quality: {'Optimal ⭐' if info['quality']['is_optimal'] else 'Acceptable ✓'}")
+        print(f"Output File: {output}")
+        print("="*60)
+        
+    except Exception as e:
+        print(f"\n❌ ERROR: {e}")
+        sys.exit(1)

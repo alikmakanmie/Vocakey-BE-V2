@@ -16,6 +16,22 @@ from vocal_analyzer import VocalAnalyzer
 from database_manager import DatabaseManager, db_manager  # ✅ Keep this
 from song_recommender_sqlite import SongRecommenderSQLite
 
+
+# ✅ Add project bin folder to PATH for rubberband.exe
+project_root = os.path.dirname(os.path.abspath(__file__))
+bin_folder = os.path.join(project_root, 'bin')
+rubberband_exe = os.path.join(project_root, 'rubberband.exe')
+
+# Add to PATH if exists
+if os.path.exists(bin_folder):
+    os.environ['PATH'] = bin_folder + os.pathsep + os.environ['PATH']
+    print(f"✅ Added bin folder to PATH: {bin_folder}")
+
+if os.path.exists(rubberband_exe):
+    os.environ['PATH'] = project_root + os.pathsep + os.environ['PATH']
+    print(f"✅ Found rubberband.exe at: {rubberband_exe}")
+
+
 # ===== KONFIGURASI =====
 app = Flask(__name__)
 CORS(app)
@@ -960,19 +976,29 @@ def search_song_by_title(title):
 
 @app.route('/api/songs/search/<string:title>/transpose', methods=['POST'])
 def transpose_song_by_title(title):
-    """Transpose song audio by title"""
+    """Transpose song audio by title with high quality (natural sound)"""
     try:
         import librosa
         import soundfile as sf
         from key_utils import transpose_key
         
+        # ✅ Try to import pyrubberband
+        try:
+            import pyrubberband as pyrb
+            PYRUBBERBAND_AVAILABLE = True
+        except ImportError:
+            PYRUBBERBAND_AVAILABLE = False
+        
         data = request.get_json()
         semitone_shift = data.get('semitone_shift', 0)
         preserve_formant = data.get('preserve_formant', True)
         
-        print(f"\n🎵 Transpose Request:")
-        print(f"   Title: {title}")
-        print(f"   Shift: {semitone_shift} semitones")
+        print(f"\n{'='*60}")
+        print(f"🎵 TRANSPOSE REQUEST")
+        print(f"{'='*60}")
+        print(f"Song: {title}")
+        print(f"Semitone Shift: {semitone_shift:+d}")
+        print(f"Preserve Formant: {preserve_formant}")
         
         if semitone_shift == 0:
             return jsonify({'success': False, 'error': 'No transpose needed'}), 400
@@ -990,6 +1016,8 @@ def transpose_song_by_title(title):
         
         if not song:
             return jsonify({'success': False, 'error': f'Song "{title}" not found'}), 404
+        
+        print(f"✅ Found song: {song['title']} by {song.get('artist', 'Unknown')}")
         
         # Find audio file
         original_audio_path = None
@@ -1009,9 +1037,10 @@ def transpose_song_by_title(title):
             original_audio_path = song.get('audio_file_path') or song.get('audio_path')
         
         if not original_audio_path or not os.path.exists(original_audio_path):
+            print(f"❌ Audio file not found for: {song['title']}")
             return jsonify({'success': False, 'error': 'Audio file not found'}), 404
         
-        print(f"✅ Found: {original_audio_path}")
+        print(f"✅ Audio path: {original_audio_path}")
         
         # Generate output path
         transposed_folder = 'songs/transposed'
@@ -1024,83 +1053,180 @@ def transpose_song_by_title(title):
         
         # Check cache
         if os.path.exists(transposed_path):
-            print(f"✅ Using cached: {transposed_path}")
+            print(f"⚡ Using cached transpose: {transposed_path}")
+            method_used = "cached"
         else:
-            print(f"🎵 Transposing...")
+            print(f"🔧 Transposing audio...")
             
-            # Load and transpose
-            y, sr = librosa.load(original_audio_path, sr=None)
-            y_shifted = librosa.effects.pitch_shift(y, sr=sr, n_steps=semitone_shift)
+            # Load audio
+            y, sr = librosa.load(original_audio_path, sr=None, mono=True)
+            print(f"   Loaded: {len(y)} samples at {sr} Hz")
+            
+            method_used = None
+            y_shifted = None
+            
+            # ✅ Try pyrubberband first (best quality)
+            if PYRUBBERBAND_AVAILABLE:
+                try:
+                    print(f"   Attempting: pyrubberband (highest quality)")
+                    y_shifted = pyrb.pitch_shift(
+                        y, 
+                        sr, 
+                        n_steps=semitone_shift,
+                        rbargs={'--formant': ''} if preserve_formant else {}
+                    )
+                    method_used = "pyrubberband"
+                    print(f"   ✅ Success with pyrubberband!")
+                except Exception as e:
+                    print(f"   ⚠️ pyrubberband failed: {str(e)}")
+                    print(f"   → Falling back to librosa with Phase Vocoder")
+            
+            # ✅ Fallback to librosa with BEST parameters
+            if y_shifted is None:
+                print(f"   Method: librosa.effects.pitch_shift (Phase Vocoder)")
+                
+                # Use librosa with better parameters for natural sound
+                y_shifted = librosa.effects.pitch_shift(
+                    y, 
+                    sr=sr, 
+                    n_steps=semitone_shift,
+                    bins_per_octave=12,  # Standard tuning
+                    res_type='kaiser_best'  # ✅ Highest quality resampling
+                )
+                method_used = "librosa_phase_vocoder"
+                print(f"   ✅ Pitch shifted by {semitone_shift} semitones")
+            
+            # Save
             sf.write(transposed_path, y_shifted, sr)
             
-            print(f"✅ Saved: {transposed_path}")
+            file_size_mb = round(os.path.getsize(transposed_path) / (1024 * 1024), 2)
+            print(f"✅ Transpose complete! ({file_size_mb} MB)")
         
         # Calculate new key
         original_key = song.get('key_note', 'C') + ' major'
         new_key = transpose_key(original_key, semitone_shift)
         
-        # Response
-        transposed_url = f"http://192.168.3.2:5000/songs/transposed/{transposed_filename}"
+        # Return relative URL
+        transposed_url = f"/songs/transposed/{transposed_filename}"
+        
+        print(f"{'='*60}")
+        print(f"✅ SUCCESS")
+        print(f"   Original Key: {original_key}")
+        print(f"   New Key: {new_key}")
+        print(f"   Method: {method_used}")
+        print(f"   Transposed URL: {transposed_url}")
+        print(f"{'='*60}\n")
         
         return jsonify({
             'success': True,
             'transposed_url': transposed_url,
             'original_key': original_key,
             'new_key': new_key,
-            'semitone_shift': semitone_shift
+            'semitone_shift': semitone_shift,
+            'method': method_used
         }), 200
         
     except Exception as e:
-        print(f"❌ Error: {str(e)}")
+        print(f"❌ Transpose Error: {str(e)}")
         import traceback
         print(traceback.format_exc())
         return jsonify({'success': False, 'error': str(e)}), 500
 
+
+@app.route('/api/songs/<int:song_id>', methods=['DELETE'])
+def delete_song(song_id):
+    """Delete song from database and file"""
+    try:
+        # Get song info
+        song = song_recommender.db_manager.get_song_by_id(song_id)
+        
+        if not song:
+            return jsonify({
+                'success': False,
+                'error': f'Song with ID {song_id} not found'
+            }), 404
+        
+        # Delete audio file if exists
+        audio_path = song.get('audio_path')
+        if audio_path and os.path.exists(audio_path):
+            try:
+                os.remove(audio_path)
+                print(f"✅ Deleted audio file: {audio_path}")
+            except Exception as e:
+                print(f"⚠️ Could not delete audio file: {e}")
+        
+        # Delete from database
+        conn = sqlite3.connect(song_recommender.db_manager.db_path)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM songs WHERE id = ?", (song_id,))
+        conn.commit()
+        conn.close()
+        
+        print(f"✅ Deleted song from database: {song['title']} (ID: {song_id})")
+        
+        return jsonify({
+            'success': True,
+            'message': f'Song "{song["title"]}" deleted successfully',
+            'deleted_song': song
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Error deleting song: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
 
 @app.route('/songs/transposed/<filename>')
 def serve_transposed_file(filename):
     """Serve transposed audio files"""
     try:
         transposed_folder = 'songs/transposed'
+        file_path = os.path.join(transposed_folder, filename)
         
-        if not os.path.exists(os.path.join(transposed_folder, filename)):
+        print(f"📁 Serving transposed audio: {file_path}")
+        
+        if not os.path.exists(file_path):
+            print(f"❌ File not found: {file_path}")
             return jsonify({'success': False, 'error': 'File not found'}), 404
+        
+        print(f"✅ Sending file: {file_path}")
+        
+        # Detect file extension
+        ext = os.path.splitext(filename)[1].lower()
+        mimetype = 'audio/wav' if ext == '.wav' else 'audio/mpeg'
         
         return send_from_directory(transposed_folder, filename)
         
     except Exception as e:
-        print(f"❌ Error: {str(e)}")
+        print(f"❌ Error serving file: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+
 if __name__ == '__main__':
-    print("\n" + "=" * 60)
-    print("🎵 VocaKey Backend - Starting Server...")
-    print("=" * 60)
-    print(f"🌐 Server URL: http://localhost:5000")
-    print(f"📡 API Endpoints:")
-    print(f"   - GET  /api/health  → Health check")
-    print(f"   - POST /api/analyze → Analyze vocal & get recommendations")
-    print(f"   - POST /api/transpose/audio → Transpose audio file")
-    print(f"   - GET  /api/test    → Test endpoint")
-    print("=" * 60 + "\n")
+    import os
     
-    app.run(host='0.0.0.0', port=5000, debug=True)
-
-
-# ===== ENDPOINT: TRANSPOSE AUDIO =====
-
-
-# ===== RUN SERVER =====
-if __name__ == '__main__':
-    print("\n" + "="*60)
-    print("🎵 VocaKey Backend - Starting Server...")
-    print("="*60)
-    print(f"🌐 Server URL: http://localhost:5000")
-    print(f"📡 API Endpoints:")
-    print(f"   - GET  /api/health  → Health check")
-    print(f"   - POST /api/analyze → Analyze vocal & get recommendations")
-    print(f"   - GET  /api/test    → Test endpoint")
-    print("="*60 + "\n")
+    # Get port from environment (Render provides PORT env var)
+    port = int(os.environ.get('PORT', 5000))
     
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    # Check if running in production
+    is_production = os.environ.get('FLASK_ENV') == 'production'
+    
+    print(f"{'='*60}")
+    print(f"🎵 VocaKey Backend Server")
+    print(f"{'='*60}")
+    print(f"Environment: {'Production' if is_production else 'Development'}")
+    print(f"Port: {port}")
+    print(f"Host: 0.0.0.0")
+    print(f"{'='*60}\n")
+    
+    app.run(
+        host='0.0.0.0',
+        port=port,
+        debug=not is_production
+    )
+
+
