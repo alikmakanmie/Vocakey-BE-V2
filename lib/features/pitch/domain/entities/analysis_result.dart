@@ -1,27 +1,27 @@
 import 'package:equatable/equatable.dart';
 
 /// Entity untuk hasil analisis vokal (Domain Layer)
-/// 
-/// Versi 2.0 - Simplified (sesuai backend baru):
-/// - ❌ Hapus: vocalRange, accuracy, vocalType
-/// - ✅ Keep: baseNote, songKey, recommendations
+///
+/// ✅ UPDATED v3.0 - Compatible dengan K-S Algorithm Backend:
+/// - Support format backend baru (K-S database)
+/// - Keep backward compatibility dengan format lama (YouTube Music)
 class AnalysisResult extends Equatable {
   /// Nada dasar dari humming (e.g., "G4", "C#5")
   final String baseNote;
-  
+
   /// Frekuensi nada dasar dalam Hz (e.g., 392.00)
   final double baseFrequency;
-  
+
   /// Key lagu yang terdeteksi (e.g., "G", "C#")
   final String songKey;
-  
+
   /// Scale lagu (major/minor)
   final String songScale;
-  
+
   /// Confidence score key detection (0.0 - 1.0)
   final double keyConfidence;
-  
-  /// List rekomendasi lagu dari YouTube Music
+
+  /// List rekomendasi lagu
   final List<SongRecommendation> recommendations;
 
   const AnalysisResult({
@@ -56,6 +56,7 @@ class AnalysisResult extends Equatable {
 }
 
 /// Entity untuk song recommendation
+/// ✅ UPDATED: Support both YouTube Music API and K-S Database format
 class SongRecommendation extends Equatable {
   final String title;
   final String artist;
@@ -65,6 +66,10 @@ class SongRecommendation extends Equatable {
   final String? thumbnail;
   final String? album;
   final double matchScore;
+  
+  // ✅ NEW: Additional fields for K-S format
+  final String? detectedKey;      // Detected key dari backend (e.g., "G major")
+  final String? audioPath;        // Audio file path di server
 
   const SongRecommendation({
     required this.title,
@@ -75,22 +80,69 @@ class SongRecommendation extends Equatable {
     this.thumbnail,
     this.album,
     required this.matchScore,
+    this.detectedKey,
+    this.audioPath,
   });
 
+  /// ✅ UPDATED: Parse dari JSON dengan support 2 format
   factory SongRecommendation.fromJson(Map<String, dynamic> json) {
-    return SongRecommendation(
-      title: json['title'] as String? ?? 'Unknown',
-      artist: json['artist'] as String? ?? 'Unknown',
-      youtubeUrl: json['youtube_url'] as String? ?? '',
-      youtubeWatchUrl: json['youtube_watch_url'] as String? ?? '',
-      duration: json['duration'] as String? ?? 'Unknown',
-      thumbnail: json['thumbnail'] as String?,
-      album: json['album'] as String?,
-      matchScore: (json['match_score'] as num?)?.toDouble() ?? 0.0,
-    );
+    // Detect format type
+    final bool isNewFormat = json.containsKey('detected_key'); // K-S format
+    final bool isYouTubeMusicFormat = json.containsKey('youtube_watch_url'); // Old format
+
+    if (isNewFormat) {
+      // ✅ NEW FORMAT (dari K-S database)
+      print('   [Song] Parsing K-S format: ${json['title']}');
+      return SongRecommendation(
+        title: json['title'] as String? ?? 'Unknown',
+        artist: json['artist'] as String? ?? 'Unknown',
+        // ✅ NEW: audio_path stored in both youtubeUrl and audioPath
+        youtubeUrl: json['audio_path'] as String? ?? '',
+        // ✅ Real YouTube link (if available)
+        youtubeWatchUrl: json['youtube_url'] as String? ?? '',
+        duration: 'Unknown', // Backend belum return duration untuk K-S format
+        thumbnail: null, // Backend belum return thumbnail untuk K-S format
+        album: null,
+        matchScore: (json['compatibility_score'] as num?)?.toDouble() ?? 
+                    (json['match_score'] as num?)?.toDouble() ?? 0.0,
+        // ✅ NEW: K-S specific fields
+        detectedKey: json['detected_key'] as String?,
+        audioPath: json['audio_path'] as String?,
+      );
+    } else if (isYouTubeMusicFormat) {
+      // OLD FORMAT (YouTube Music API - backward compatibility)
+      print('   [Song] Parsing YouTube Music format: ${json['title']}');
+      return SongRecommendation(
+        title: json['title'] as String? ?? 'Unknown',
+        artist: json['artist'] as String? ?? 'Unknown',
+        youtubeUrl: json['youtube_url'] as String? ?? '',
+        youtubeWatchUrl: json['youtube_watch_url'] as String? ?? '',
+        duration: json['duration'] as String? ?? 'Unknown',
+        thumbnail: json['thumbnail'] as String?,
+        album: json['album'] as String?,
+        matchScore: (json['match_score'] as num?)?.toDouble() ?? 0.0,
+        detectedKey: null,
+        audioPath: null,
+      );
+    } else {
+      // FALLBACK: Minimal parsing
+      print('   [Song] Parsing unknown format: ${json['title']}');
+      return SongRecommendation(
+        title: json['title'] as String? ?? 'Unknown',
+        artist: json['artist'] as String? ?? 'Unknown',
+        youtubeUrl: json['youtube_url'] as String? ?? '',
+        youtubeWatchUrl: json['youtube_url'] as String? ?? '',
+        duration: json['duration'] as String? ?? 'Unknown',
+        thumbnail: json['thumbnail'] as String?,
+        album: json['album'] as String?,
+        matchScore: (json['match_score'] as num?)?.toDouble() ?? 0.0,
+        detectedKey: null,
+        audioPath: null,
+      );
+    }
   }
 
-  /// ✅ ADDED: toJson method untuk serialization
+  /// ✅ toJson method untuk serialization
   Map<String, dynamic> toJson() {
     return {
       'title': title,
@@ -101,6 +153,8 @@ class SongRecommendation extends Equatable {
       'thumbnail': thumbnail,
       'album': album,
       'match_score': matchScore,
+      'detected_key': detectedKey,
+      'audio_path': audioPath,
     };
   }
 
@@ -117,6 +171,9 @@ class SongRecommendation extends Equatable {
   /// Check if thumbnail available
   bool get hasThumbnail => thumbnail != null && thumbnail!.isNotEmpty;
 
+  /// Match score in percentage (0-100%)
+  int get matchPercentage => (matchScore * 100).round();
+
   @override
   List<Object?> get props => [
         title,
@@ -127,6 +184,8 @@ class SongRecommendation extends Equatable {
         thumbnail,
         album,
         matchScore,
+        detectedKey,
+        audioPath,
       ];
 
   @override

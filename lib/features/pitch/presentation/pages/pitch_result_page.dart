@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:youtube_player_flutter/youtube_player_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
-
 import '../../../../core/constants/app_colors.dart';
+import '../../../../core/constants/api_constants.dart';
 import '../../../../core/services/local_storage_service.dart';
 import '../../domain/entities/analysis_result.dart';
+import '../../../music/presentation/pages/simple_audio_player_page.dart';
 
 class PitchResultPage extends StatefulWidget {
   final AnalysisResult result;
@@ -19,21 +20,21 @@ class PitchResultPage extends StatefulWidget {
 }
 
 class _PitchResultPageState extends State<PitchResultPage> {
-  YoutubePlayerController? _youtubeController;
-  int _selectedSongIndex = 0;
+  YoutubePlayerController? youtubeController;
+  int selectedSongIndex = 0;
 
   @override
   void initState() {
     super.initState();
-    _printResultToConsole();
-    _saveAnalysisResult();
-    _initializeYoutubePlayer();
+    printResultToConsole();
+    saveAnalysisResult();
+    initializeYoutubePlayer();
   }
 
-  void _printResultToConsole() {
-    print('\n' + '=' * 60);
+  void printResultToConsole() {
+    print('============================================================');
     print('🎵 PITCH ANALYSIS RESULT (v2.0)');
-    print('=' * 60);
+    print('============================================================');
     print('📌 Base Note      : ${widget.result.baseNote}');
     print('📊 Base Frequency : ${widget.result.baseFrequency} Hz');
     print('🎹 Song Key       : ${widget.result.fullKey}');
@@ -41,36 +42,36 @@ class _PitchResultPageState extends State<PitchResultPage> {
     print('🎼 Recommendations: ${widget.result.recommendations.length} songs');
 
     if (widget.result.recommendations.isNotEmpty) {
-      print('\n📀 Recommended Songs:');
+      print('📀 Recommended Songs:');
       for (int i = 0; i < widget.result.recommendations.length; i++) {
         final song = widget.result.recommendations[i];
-        print('  ${i + 1}. ${song.title} - ${song.artist} (Score: ${song.matchScore.toStringAsFixed(1)})');
+        print('   ${i + 1}. ${song.title} - ${song.artist} (Score: ${song.matchScore.toStringAsFixed(1)})');
       }
     }
-    print('=' * 60 + '\n');
+    print('============================================================');
   }
 
-  Future<void> _saveAnalysisResult() async {
+  Future<void> saveAnalysisResult() async {
     try {
       await LocalStorageService.saveLastAnalysis(
-        note: widget.result.baseNote,
-        vocalRange: widget.result.fullKey, // Save key instead
+        note: widget.result.fullKey, // ✅ Save song key instead of base note
+        vocalRange: widget.result.fullKey,
         accuracy: widget.result.confidencePercentage,
-        vocalType: null,
+        vocalType: 'Unknown',
       );
       print('✅ Analysis result saved to local storage');
     } catch (e) {
-      print('❌ Error saving analysis result: $e');
+      print('Error saving analysis result: $e');
     }
   }
 
-  void _initializeYoutubePlayer() {
+  void initializeYoutubePlayer() {
     if (widget.result.recommendations.isNotEmpty) {
       final firstSong = widget.result.recommendations[0];
       final videoId = firstSong.videoId;
 
       if (videoId != null && videoId.isNotEmpty) {
-        _youtubeController = YoutubePlayerController(
+        youtubeController = YoutubePlayerController(
           initialVideoId: videoId,
           flags: const YoutubePlayerFlags(
             autoPlay: false,
@@ -82,34 +83,79 @@ class _PitchResultPageState extends State<PitchResultPage> {
     }
   }
 
-  void _changeSong(int index) {
+  void changeSong(int index) {
     final song = widget.result.recommendations[index];
     final videoId = song.videoId;
 
     if (videoId != null && videoId.isNotEmpty) {
       setState(() {
-        _selectedSongIndex = index;
-        _youtubeController?.load(videoId);
+        selectedSongIndex = index;
       });
+      youtubeController?.load(videoId);
     }
   }
 
-  Future<void> _openInYouTube(String url) async {
+  Future<void> openInYouTube(String url) async {
     final uri = Uri.parse(url);
     if (await canLaunchUrl(uri)) {
       await launchUrl(uri, mode: LaunchMode.externalApplication);
     } else {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Cannot open YouTube')),
+          const SnackBar(content: Text('Tidak dapat membuka YouTube')),
         );
       }
     }
   }
 
+  void playRecommendedSong(SongRecommendation song) {
+    final title = song.title;
+    final artist = song.artist;
+    final detectedKey = song.detectedKey ?? 'Unknown';
+
+    String audioPath = song.audioPath ?? '';
+    print('Raw audiopath from recommendation: $audioPath');
+
+    String audioUrl = '';
+    if (audioPath.isNotEmpty && audioPath != '') {
+      final filename = audioPath.split('/').last;
+      audioUrl = 'audio/$filename';
+      print('Using audiopath filename: $filename');
+    } else {
+      String filename = '${title}_$artist.mp3'
+          .replaceAll(' ', '_')
+          .replaceAll(RegExp(r'[^a-zA-Z0-9_.]'), '');
+      audioUrl = 'audio/$filename';
+      print('Generated filename: $filename');
+    }
+
+    if (audioUrl.startsWith('/') && ApiConstants.baseUrl.endsWith('/')) {
+      audioUrl = audioUrl.substring(1);
+    }
+
+    final String fullAudioUrl = audioUrl.startsWith('http')
+        ? audioUrl
+        : '${ApiConstants.baseUrl}$audioUrl';
+
+    print('Opening audio player for: $title');
+    print('Full Audio URL: $fullAudioUrl');
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => SimpleAudioPlayerPage(
+          audioUrl: fullAudioUrl,
+          title: title,
+          artist: artist,
+          originalKey: detectedKey,
+        ),
+      ),
+    );
+  }
+
   @override
   void dispose() {
-    _youtubeController?.dispose();
+    youtubeController?.dispose();
     super.dispose();
   }
 
@@ -126,34 +172,22 @@ class _PitchResultPageState extends State<PitchResultPage> {
         child: SafeArea(
           child: Column(
             children: [
-              // ✅ HEADER
               _buildHeader(),
-
-              // ✅ SCROLLABLE CONTENT
               Expanded(
                 child: SingleChildScrollView(
                   physics: const BouncingScrollPhysics(),
                   child: Column(
                     children: [
                       const SizedBox(height: 20),
-
-                      // ✅ RESULT CARD (Base Note + Key)
                       _buildResultCard(),
-
                       const SizedBox(height: 24),
-
-                      // ✅ YOUTUBE VIDEO PLAYER (if available)
-                      if (hasRecommendations && _youtubeController != null)
+                      if (hasRecommendations && youtubeController != null)
                         _buildVideoPlayer(),
-
                       const SizedBox(height: 16),
-
-                      // ✅ SONG RECOMMENDATIONS LIST
                       if (hasRecommendations)
                         _buildRecommendationsList()
                       else
                         _buildNoRecommendations(),
-
                       const SizedBox(height: 32),
                     ],
                   ),
@@ -177,7 +211,7 @@ class _PitchResultPageState extends State<PitchResultPage> {
           ),
           const SizedBox(width: 8),
           const Text(
-            'Analysis Result',
+            'Hasil Analisis',
             style: TextStyle(
               color: Colors.white,
               fontSize: 20,
@@ -218,7 +252,6 @@ class _PitchResultPageState extends State<PitchResultPage> {
       ),
       child: Column(
         children: [
-          // Icon
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
@@ -231,12 +264,9 @@ class _PitchResultPageState extends State<PitchResultPage> {
               color: Color(0xFF6B9FE8),
             ),
           ),
-
           const SizedBox(height: 20),
-
-          // Base Note
           const Text(
-            'Your Base Note',
+            'Kunci Lagu Anda',
             style: TextStyle(
               color: Colors.black54,
               fontSize: 14,
@@ -244,46 +274,40 @@ class _PitchResultPageState extends State<PitchResultPage> {
             ),
           ),
           const SizedBox(height: 8),
+          // ✅ Display fullKey (G# major) instead of baseNote (C2)
           Text(
-            widget.result.baseNote,
+            widget.result.fullKey,
             style: const TextStyle(
               color: Colors.black87,
-              fontSize: 56,
+              fontSize: 48,
               fontWeight: FontWeight.bold,
-              letterSpacing: 2,
+              letterSpacing: 1,
             ),
           ),
+          const SizedBox(height: 8),
+          // ✅ Show base note as subtitle
           Text(
-            '${widget.result.baseFrequency.toStringAsFixed(2)} Hz',
+            'Nada Dasar: ${widget.result.baseNote} (${widget.result.baseFrequency.toStringAsFixed(2)} Hz)',
             style: const TextStyle(
               color: Colors.black54,
-              fontSize: 16,
+              fontSize: 14,
               fontWeight: FontWeight.w500,
             ),
           ),
-
           const SizedBox(height: 24),
-
-          // Divider
-          Container(
-            height: 1,
-            color: Colors.black12,
-          ),
-
+          Container(height: 1, color: Colors.black12),
           const SizedBox(height: 24),
-
-          // Song Key Detection
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
               _buildInfoChip(
                 icon: Icons.piano,
-                label: 'Song Key',
+                label: 'Kunci',
                 value: widget.result.fullKey,
               ),
               _buildInfoChip(
                 icon: Icons.bar_chart,
-                label: 'Confidence',
+                label: 'Kepercayaan',
                 value: '${widget.result.confidencePercentage.toStringAsFixed(0)}%',
               ),
             ],
@@ -339,7 +363,7 @@ class _PitchResultPageState extends State<PitchResultPage> {
       child: ClipRRect(
         borderRadius: BorderRadius.circular(16),
         child: YoutubePlayer(
-          controller: _youtubeController!,
+          controller: youtubeController!,
           showVideoProgressIndicator: true,
           progressIndicatorColor: const Color(0xFF6B9FE8),
           bottomActions: [
@@ -374,7 +398,7 @@ class _PitchResultPageState extends State<PitchResultPage> {
               ),
               const SizedBox(width: 12),
               Text(
-                'Recommended Songs (${widget.result.recommendations.length})',
+                'Lagu yang Direkomendasikan (${widget.result.recommendations.length})',
                 style: const TextStyle(
                   color: Colors.white,
                   fontSize: 18,
@@ -392,7 +416,7 @@ class _PitchResultPageState extends State<PitchResultPage> {
           itemCount: widget.result.recommendations.length,
           itemBuilder: (context, index) {
             final song = widget.result.recommendations[index];
-            final isSelected = index == _selectedSongIndex;
+            final isSelected = index == selectedSongIndex;
             return _buildSongCard(song, index, isSelected);
           },
         ),
@@ -418,13 +442,13 @@ class _PitchResultPageState extends State<PitchResultPage> {
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          onTap: () => _changeSong(index),
+          onTap: () => playRecommendedSong(song),
+          onLongPress: () => changeSong(index),
           borderRadius: BorderRadius.circular(16),
           child: Padding(
             padding: const EdgeInsets.all(12),
             child: Row(
               children: [
-                // Thumbnail
                 ClipRRect(
                   borderRadius: BorderRadius.circular(8),
                   child: song.hasThumbnail
@@ -438,7 +462,6 @@ class _PitchResultPageState extends State<PitchResultPage> {
                       : _buildPlaceholderImage(),
                 ),
                 const SizedBox(width: 12),
-                // Song Info
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -467,13 +490,13 @@ class _PitchResultPageState extends State<PitchResultPage> {
                       Row(
                         children: [
                           Icon(
-                            Icons.access_time,
+                            Icons.piano,
                             size: 14,
                             color: Colors.white.withOpacity(0.6),
                           ),
                           const SizedBox(width: 4),
                           Text(
-                            song.duration,
+                            song.detectedKey ?? 'Unknown',
                             style: TextStyle(
                               color: Colors.white.withOpacity(0.6),
                               fontSize: 12,
@@ -499,16 +522,16 @@ class _PitchResultPageState extends State<PitchResultPage> {
                     ],
                   ),
                 ),
-                // Play Icon & Open YouTube
                 Column(
                   children: [
                     IconButton(
-                      icon: Icon(
-                        isSelected ? Icons.pause_circle : Icons.play_circle,
+                      icon: const Icon(
+                        Icons.play_circle_filled,
                         color: Colors.white,
                         size: 32,
                       ),
-                      onPressed: () => _changeSong(index),
+                      onPressed: () => playRecommendedSong(song),
+                      tooltip: 'Putar audio',
                     ),
                     IconButton(
                       icon: const Icon(
@@ -516,7 +539,8 @@ class _PitchResultPageState extends State<PitchResultPage> {
                         color: Colors.white70,
                         size: 20,
                       ),
-                      onPressed: () => _openInYouTube(song.youtubeWatchUrl),
+                      onPressed: () => openInYouTube(song.youtubeWatchUrl),
+                      tooltip: 'Buka di YouTube',
                     ),
                   ],
                 ),
@@ -561,7 +585,7 @@ class _PitchResultPageState extends State<PitchResultPage> {
           ),
           const SizedBox(height: 16),
           Text(
-            'No Recommendations',
+            'Tidak Ada Rekomendasi',
             style: TextStyle(
               color: Colors.white.withOpacity(0.8),
               fontSize: 18,
@@ -570,7 +594,7 @@ class _PitchResultPageState extends State<PitchResultPage> {
           ),
           const SizedBox(height: 8),
           Text(
-            'Try recording again with a clearer voice',
+            'Coba rekam lagi dengan suara yang lebih jelas',
             textAlign: TextAlign.center,
             style: TextStyle(
               color: Colors.white.withOpacity(0.6),

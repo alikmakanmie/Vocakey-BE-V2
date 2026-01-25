@@ -6,13 +6,13 @@ import 'package:record/record.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:noise_meter/noise_meter.dart';
 import 'package:percent_indicator/percent_indicator.dart';
-
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/services/permission_service.dart';
 import '../bloc/pitch_bloc.dart';
 import '../bloc/pitch_event.dart';
 import '../bloc/pitch_state.dart';
 import 'pitch_result_page.dart';
+import 'pitch_loading_page.dart';
 
 class PitchRecordingPage extends StatefulWidget {
   const PitchRecordingPage({Key? key}) : super(key: key);
@@ -25,7 +25,6 @@ class _PitchRecordingPageState extends State<PitchRecordingPage>
     with SingleTickerProviderStateMixin {
   final AudioRecorder _audioRecorder = AudioRecorder();
   final PermissionService _permissionService = PermissionService();
-
   bool _isRecording = false;
   bool _isAnalyzing = false;
   int _recordDuration = 0;
@@ -39,7 +38,6 @@ class _PitchRecordingPageState extends State<PitchRecordingPage>
   List<double> _amplitudes = List.filled(12, 0.2);
   double _currentDecibel = 0;
 
-  // ✅ NEW: Max recording duration (30 seconds)
   static const int maxRecordingDuration = 30;
 
   @override
@@ -88,12 +86,12 @@ class _PitchRecordingPageState extends State<PitchRecordingPage>
           children: [
             Icon(Icons.error_outline, color: Colors.red, size: 28),
             SizedBox(width: 12),
-            Text('Recording Failed', style: TextStyle(fontSize: 18)),
+            Text('Rekaman Gagal', style: TextStyle(fontSize: 18)),
           ],
         ),
         content: Text(
           message.isEmpty
-              ? 'Voice not detected. Make sure you hum clearly.'
+              ? 'Suara tidak terdeteksi. Pastikan Anda bersenandung dengan jelas.'
               : message,
           style: const TextStyle(fontSize: 14),
         ),
@@ -113,7 +111,7 @@ class _PitchRecordingPageState extends State<PitchRecordingPage>
                 borderRadius: BorderRadius.circular(8),
               ),
             ),
-            child: const Text('Try Again'),
+            child: const Text('Coba Lagi'),
           ),
         ],
       ),
@@ -122,13 +120,12 @@ class _PitchRecordingPageState extends State<PitchRecordingPage>
 
   Future<void> _startRecording() async {
     try {
-      // Request permission
       bool hasPermission = await _permissionService.requestMicrophonePermission();
       if (!hasPermission) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Microphone permission is required'),
+              content: Text('Izin mikrofon diperlukan'),
               backgroundColor: Colors.red,
             ),
           );
@@ -169,7 +166,6 @@ class _PitchRecordingPageState extends State<PitchRecordingPage>
             _recordDuration++;
           });
 
-          // ✅ Auto stop at max duration
           if (_recordDuration >= maxRecordingDuration) {
             timer.cancel();
             _stopRecording();
@@ -179,7 +175,7 @@ class _PitchRecordingPageState extends State<PitchRecordingPage>
     } catch (e) {
       print('Error starting recording: $e');
       if (mounted) {
-        _showErrorDialog('Failed to start recording: $e');
+        _showErrorDialog('Gagal memulai rekaman: $e');
       }
     }
   }
@@ -192,7 +188,6 @@ class _PitchRecordingPageState extends State<PitchRecordingPage>
           setState(() {
             _currentDecibel = noiseReading.meanDecibel;
             double normalizedDb = (_currentDecibel - 20).clamp(0, 70) / 70;
-            
             for (int i = _amplitudes.length - 1; i > 0; i--) {
               _amplitudes[i] = _amplitudes[i - 1];
             }
@@ -222,7 +217,21 @@ class _PitchRecordingPageState extends State<PitchRecordingPage>
       });
 
       if (path != null && mounted) {
-        context.read<PitchBloc>().add(AnalyzeAudioEvent(path));
+        // Simpan reference BLoC SEBELUM navigate
+        final pitchBloc = context.read<PitchBloc>();
+        
+        // Navigate ke loading page
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => const PitchLoadingPage(),
+          ),
+        );
+
+        // Trigger analysis menggunakan reference
+        Future.delayed(const Duration(milliseconds: 100), () {
+          pitchBloc.add(AnalyzeAudioEvent(path));
+        });
       }
     } catch (e) {
       print('Error stopping recording: $e');
@@ -230,7 +239,7 @@ class _PitchRecordingPageState extends State<PitchRecordingPage>
         _isAnalyzing = false;
       });
       if (mounted) {
-        _showErrorDialog('Failed to stop recording: $e');
+        _showErrorDialog('Gagal menghentikan rekaman: $e');
       }
     }
   }
@@ -244,7 +253,6 @@ class _PitchRecordingPageState extends State<PitchRecordingPage>
   @override
   Widget build(BuildContext context) {
     final progress = _recordDuration / maxRecordingDuration;
-
     return Scaffold(
       body: Container(
         decoration: const BoxDecoration(
@@ -266,7 +274,7 @@ class _PitchRecordingPageState extends State<PitchRecordingPage>
                     ),
                     const SizedBox(width: 8),
                     const Text(
-                      'Record Your Voice',
+                      'Rekam Suara Anda',
                       style: TextStyle(
                         color: Colors.white,
                         fontSize: 20,
@@ -276,12 +284,11 @@ class _PitchRecordingPageState extends State<PitchRecordingPage>
                   ],
                 ),
               ),
-
               const Spacer(flex: 1),
 
               // Title
               const Text(
-                'Determine Your\nBase Note',
+                'Menentukan\nNada Dasar Anda',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: Colors.white,
@@ -293,20 +300,19 @@ class _PitchRecordingPageState extends State<PitchRecordingPage>
               const SizedBox(height: 12),
               Text(
                 _isAnalyzing
-                    ? 'Analyzing your voice...'
+                    ? 'Menganalisis suara Anda...'
                     : _isRecording
-                        ? 'Recording in progress...'
-                        : 'Tap the button to start',
+                        ? 'Sedang merekam...'
+                        : 'Ketuk tombol untuk memulai',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: Colors.white.withOpacity(0.9),
                   fontSize: 16,
                 ),
               ),
-
               const Spacer(flex: 1),
 
-              // ✅ Audio Spectrum Visualizer (only when recording)
+              // Audio Spectrum Visualizer
               if (_isRecording)
                 _AudioSpectrumVisualizer(
                   amplitudes: _amplitudes,
@@ -317,11 +323,10 @@ class _PitchRecordingPageState extends State<PitchRecordingPage>
 
               const Spacer(flex: 1),
 
-              // ✅ MAIN RECORDING BUTTON WITH PROGRESS
+              // Recording Button
               Stack(
                 alignment: Alignment.center,
                 children: [
-                  // Circular Progress Indicator (when recording)
                   if (_isRecording)
                     CircularPercentIndicator(
                       radius: 90.0,
@@ -352,7 +357,6 @@ class _PitchRecordingPageState extends State<PitchRecordingPage>
                       circularStrokeCap: CircularStrokeCap.round,
                     )
                   else
-                    // Static button (when not recording)
                     GestureDetector(
                       onTap: !_isAnalyzing ? _startRecording : null,
                       child: Container(
@@ -385,40 +389,37 @@ class _PitchRecordingPageState extends State<PitchRecordingPage>
                     ),
                 ],
               ),
-
               const SizedBox(height: 24),
 
-              // ✅ TIMER DISPLAY (when recording)
-if (_isRecording)
-  Container(
-    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-    decoration: BoxDecoration(
-      color: Colors.white.withOpacity(0.2),
-      borderRadius: BorderRadius.circular(20),
-    ),
-    child: Text(
-      _formatDuration(_recordDuration),
-      style: const TextStyle(
-        color: Colors.white,
-        fontSize: 28,
-        fontWeight: FontWeight.bold,
-        // ✅ FIXED: Removed fontFeatureSettings
-      ),
-    ),
-  )
-else
-  const SizedBox(height: 48),
-
+              // Timer
+              if (_isRecording)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    _formatDuration(_recordDuration),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 28,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                )
+              else
+                const SizedBox(height: 48),
 
               const SizedBox(height: 20),
 
-              // ✅ STOP BUTTON (visible only when recording)
+              // Stop Button
               if (_isRecording)
                 ElevatedButton.icon(
                   onPressed: _stopRecording,
                   icon: const Icon(Icons.stop, size: 24),
                   label: const Text(
-                    'STOP RECORDING',
+                    'HENTIKAN REKAMAN',
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
@@ -439,7 +440,8 @@ else
                 )
               else if (!_isAnalyzing)
                 Text(
-                  'Hum or sing clearly for best results',
+                  'Senandung atau nyanyikan dengan jelas untuk hasil terbaik',
+                  textAlign: TextAlign.center,
                   style: TextStyle(
                     color: Colors.white.withOpacity(0.7),
                     fontSize: 14,
@@ -455,7 +457,7 @@ else
   }
 }
 
-// ✅ Real-time Audio Spectrum Visualizer
+// Audio Spectrum Visualizer
 class _AudioSpectrumVisualizer extends StatelessWidget {
   final List<double> amplitudes;
   final bool isRecording;
@@ -473,7 +475,6 @@ class _AudioSpectrumVisualizer extends StatelessWidget {
       child: Stack(
         alignment: Alignment.center,
         children: [
-          // Background Circle
           Container(
             width: 160,
             height: 160,
@@ -482,7 +483,6 @@ class _AudioSpectrumVisualizer extends StatelessWidget {
               color: Colors.white.withOpacity(0.1),
             ),
           ),
-          // Spectrum Bars
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.center,
@@ -508,7 +508,6 @@ class _AudioSpectrumVisualizer extends StatelessWidget {
               );
             }),
           ),
-          // Music note icon
           Positioned(
             top: 5,
             right: 20,

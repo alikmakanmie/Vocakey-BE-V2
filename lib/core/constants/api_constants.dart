@@ -1,6 +1,6 @@
 class ApiConstants {
   // Base URL - Cloudflare Tunnel (tanpa trailing slash)
-  static const String baseUrl = 'https://greene-broken-friendly-location.trycloudflare.com';
+  static const String baseUrl = 'http://72.61.143.174:5000/';
   
   // Endpoints
   static const String analyzeEndpoint = '/api/analyze'; // ✅ CORRECT
